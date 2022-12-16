@@ -1,23 +1,14 @@
 const { default: Big } = require("big.js");
 const ethers = require("ethers");
-const { SWAP_ABI } = require("./scripts/abi/UniswapV3Events");
-const UniswapV3Pool = require("./scripts/abi/UniswapV3Pair");
-const UniswapV2Pair = require("./scripts/abi/UniswapV2Pair");
-const IERC20 = require("./scripts/abi/IERC20");
+const UNISWAPV3_ABI = require("./scripts/helpers/uniswapV3/UniswapV3Pool.json");
+const { UNISWAPV2_ABI } = require("./scripts/helpers/uniswapV2/abi");
+const UNIS = require("./scripts/helpers/uniswapV2/abi");
+const IERC20 = require("./scripts/helpers/ierc20/abi/IERC20.json");
 const { SWAP_EVENT_SIGNATURE } = require("./scripts/helpers");
+const { POLYGON_PROVIDER } = require("./scripts/provider");
+const { getSpotPrice } = require("./scripts/helpers/UniswapV3/GetPrice");
 
-const POLYGON_MAINNET_URL =
-  "https://polygon-mainnet.g.alchemy.com/v2/4zo-2oGovRKoVjdokcVaaSTuz22q9sJB";
-const ETHEREUM_MAINNET_URL =
-  "https://eth-mainnet.g.alchemy.com/v2/lKJk6w82nyQy03A0tm5BMbg-s_uNtB7b";
-
-const POLYGON_PROVIDER = new ethers.providers.JsonRpcProvider(
-  POLYGON_MAINNET_URL,
-);
-const ETHEREUM_PROVIDER = new ethers.providers.JsonRpcProvider(
-  ETHEREUM_MAINNET_URL,
-);
-
+const WETH_POLYGON = "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619";
 const MATIC_WETH__UNISWAPV3_POLYGON =
   "0x86f1d8390222A3691C28938eC7404A1661E618e0";
 
@@ -26,7 +17,7 @@ const WMATIC_WETH__QUICKSWAP_POLYGON =
 
 const uniswap_pair_contract = new ethers.Contract(
   MATIC_WETH__UNISWAPV3_POLYGON,
-  UniswapV3Pool.abi,
+  UNISWAPV3_ABI.abi,
   POLYGON_PROVIDER,
 );
 
@@ -36,7 +27,7 @@ let isExecuting = false;
 
 const quickswap_pair_contract = new ethers.Contract(
   WMATIC_WETH__QUICKSWAP_POLYGON,
-  UniswapV2Pair.abi,
+  UNISWAPV2_ABI.UNISWAPV2PAIR,
   POLYGON_PROVIDER,
 );
 
@@ -48,82 +39,104 @@ const main = async () => {
   POLYGON_PROVIDER.on(filter, async (event) => {
     if (!isExecuting) {
       isExecuting = true;
-
-      console.log(" EVENT ON PAIR DETECTED");
+      console.log(`========`);
+      console.log(" A new event on uniswap pool happened");
+      console.log(`========`);
 
       const diff = await checkForImbalance("Uniswap");
-      console.log(`diff: ${diff} \n`);
+      console.log(`========`);
+      console.log(`Price difference: ${diff} \n`);
+      console.log(`========`);
 
       const path = calculateDirectionOfSwap(diff);
 
       if (!path) {
-        console.log("No Arbitrage sadly");
+        console.log(`========`);
+        console.log("No Arbitrage opportunity detected");
+        console.log(`========`);
         isExecuting = false;
         return;
       }
 
-      console.log("Chance for abitrage, lets go ON!!");
+      console.log(`========`);
+      console.log("Arbitrage opportunity Detected!");
+      console.log(`========`);
       isExecuting = false;
     }
   });
 };
 
-const checkForImbalance = async (exchange) => {
-  console.log(`Swap initiated on ${exchange}`);
-
-  const uRatio = await calculatePriceRatio(
-    "Uniswap",
+const checkForImbalance = async () => {
+  const {
+    quote: price0,
+    baseToken_ierc20: baseToken0,
+    swapToken_ierc20: swapToken0,
+  } = await getSpotPrice(
     uniswap_pair_contract,
     MATIC_WETH__UNISWAPV3_POLYGON,
-  );
-  const sRatio = await calculatePriceRatio(
-    "QuickSwap",
-    quickswap_pair_contract,
-    WMATIC_WETH__QUICKSWAP_POLYGON,
+    WETH_POLYGON,
   );
 
-  const diff = calculateDifference(uRatio, sRatio);
+  const formattedPrice0 = ethers.utils.formatUnits(
+    price0.toString(),
+    await swapToken0.decimals(),
+  );
+  const baseTokenSymbol0 = await baseToken0.symbol();
+  const swapTokenSymbol0 = await swapToken0.symbol();
+
+  console.log(`========`);
+  console.log(
+    `Price of 1 ${baseTokenSymbol0} on Uniswap : ${formattedPrice0} ${swapTokenSymbol0} \n`,
+  );
+
+  const {
+    price: price1,
+    baseToken_ierc20: baseToken1,
+    swapToken_ierc20: swapToken1,
+  } = await calculatePriceRatio(
+    quickswap_pair_contract,
+    WMATIC_WETH__QUICKSWAP_POLYGON,
+    WETH_POLYGON,
+  );
+
+  const formattedPrice1 = price1;
+  const baseTokenSymbol1 = await baseToken1.symbol();
+  const swapTokenSymbol1 = await swapToken1.symbol();
+
+  console.log(`========`);
+  console.log(
+    `Price of 1 ${baseTokenSymbol1} on QuickSwap : ${formattedPrice1} ${swapTokenSymbol1} \n`,
+  );
+
+  const diff = calculateDifference(formattedPrice0, formattedPrice1);
 
   return diff;
 };
 
-const calculatePriceRatio = async (exchange, pairContract, pairAddress) => {
+const calculatePriceRatio = async (pairContract, pairAddress, baseToken) => {
   const token0 = await pairContract.token0();
   const token1 = await pairContract.token1();
 
-  const token0_ierc20 = new ethers.Contract(
-    token0,
+  const swapToken = baseToken == token0 ? token1 : token0;
+
+  const baseToken_ierc20 = new ethers.Contract(
+    baseToken,
     IERC20.abi,
     POLYGON_PROVIDER,
   );
 
-  const token1_ierc20 = new ethers.Contract(
-    token1,
+  const swapToken_ierc20 = new ethers.Contract(
+    swapToken,
     IERC20.abi,
     POLYGON_PROVIDER,
   );
 
-  const reserve0 = await token0_ierc20.balanceOf(pairAddress);
-  const reserve1 = await token1_ierc20.balanceOf(pairAddress);
+  const reserveBase = await baseToken_ierc20.balanceOf(pairAddress);
+  const reserveSwap = await swapToken_ierc20.balanceOf(pairAddress);
 
-  const formattedReserve0 = ethers.utils.formatUnits(reserve0, 18);
-  const formattedReserve1 = ethers.utils.formatUnits(reserve1, 18);
+  const price = Big(reserveSwap).div(reserveBase);
 
-  const symbol0 = await token0_ierc20.symbol();
-  const symbol1 = await token1_ierc20.symbol();
-
-  console.log(`========`);
-  console.log(`Reserve of ${symbol0} on ${exchange} : ${formattedReserve0} \n`);
-  console.log(`Reserve of ${symbol1} on ${exchange} : ${formattedReserve1} \n`);
-
-  const ratio = Big(reserve0).div(Big(reserve1)).toString();
-
-  console.log(
-    `Reserve Ratio for  ${symbol0}/${symbol1} ${exchange} is: ${ratio} \n`,
-  );
-  console.log(`========`);
-
-  return ratio;
+  return { price, baseToken_ierc20, swapToken_ierc20 };
 };
 
 const calculateDifference = (price0, price1) => {
