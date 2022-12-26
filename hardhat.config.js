@@ -13,12 +13,12 @@ module.exports = {
   networks: {
     hardhat: {
       forking: {
-        url: "https://rpc.ankr.com/bsc",
+        url: "https://polygon-mainnet.infura.io/v3/0c1cf12a2abb497288c2f23bb29d0761",
       },
     },
     mainnet: {
-      url: "https://bsc-dataseed1.binance.org/",
-      chainId: 56,
+      url: "https://polygon-mainnet.infura.io/v3/0c1cf12a2abb497288c2f23bb29d0761",
+      chainId: 137,
     },
   },
 };
