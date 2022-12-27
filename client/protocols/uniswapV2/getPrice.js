@@ -20,10 +20,9 @@ const getPairPriceUniswapV2 = async (
   );
 
   //////
-  const amountsOut = await router_contract.getAmountsOut(baseAmount, [
-    baseToken.address,
-    swapToken.address,
-  ]);
+  const amountsOut = await router_contract
+    .getAmountsOut(baseAmount, [baseToken.address, swapToken.address])
+    .catch(() => {});
 
   const price = amountsOut[1];
 

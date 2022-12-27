@@ -3,7 +3,7 @@ const QUOTER = require("../../abi/UniswapV3/Quoter.json");
 const FACTORY = require("../../abi/UniswapV3/UniswapV3Factory.json");
 const POOL = require("../../abi/UniswapV3/UniswapV3Pool.json");
 const { POLYGON_PROVIDER } = require("../../provider");
-const { UNISWAPV3_ADRESS } = require("./Addresses");
+const { UNISWAPV3_ADRESS } = require("./addresses");
 const IERC20 = require("../../abi/IERC20/IERC20.json");
 
 const quoter_contract = new ethers.Contract(
@@ -23,11 +23,9 @@ const getPairPriceUniswapV3 = async (
     FACTORY.abi,
     POLYGON_PROVIDER,
   );
-  const poolAddress = await factory_contract.getPool(
-    baseToken.address,
-    swapToken.address,
-    500,
-  );
+  const poolAddress = await factory_contract
+    .getPool(baseToken.address, swapToken.address, 500)
+    .catch(() => {});
 
   const poolContract = new ethers.Contract(
     poolAddress,
@@ -35,22 +33,22 @@ const getPairPriceUniswapV3 = async (
     POLYGON_PROVIDER,
   );
 
-  const fee = await poolContract.fee();
+  const fee = await poolContract.fee().catch(() => {});
 
   const amountIn = ethers.utils.parseUnits(
     amount.toString(),
     baseToken.decimals,
   );
 
-  const quote = await quoter_contract.callStatic.quoteExactInputSingle(
-    baseToken.address,
-    swapToken.address,
-    fee,
-    amountIn.toString(),
-    0,
-  );
-
-  //console.log(ethers.utils.formatUnits(quote, 18));
+  const quote = await quoter_contract.callStatic
+    .quoteExactInputSingle(
+      baseToken.address,
+      swapToken.address,
+      fee,
+      amountIn.toString(),
+      0,
+    )
+    .catch(() => {});
 
   return quote;
 };

@@ -1,70 +1,15 @@
 const ethers = require("ethers");
-const { POLYGON_PROVIDER } = require("./scripts/provider");
-const {
-  getPairPriceUniswapV3,
-} = require("./scripts/helpers/uniswapV3/GetPairPrice");
-
-const FRAXSWAPROUTER = require("./scripts/abi/Fraxswap/FraxswapRouter.json");
-
-const {
-  getPairPriceUniswapV2,
-} = require("./scripts/helpers/uniswapV2/GetPairPrice");
-const { protocols } = require("./scripts/protocols");
-
-const {
-  getPrice: getKyberPrice,
-} = require("./scripts/helpers/kyberswap/GetQuote");
-
-const { POLYGON_PAIRS, getPairName } = require("./scripts/pairs");
-
 const chalk = require("chalk");
+const { POLYGON_PROVIDER } = require("./provider");
+const { POLYGON_PAIRS, getPairName } = require("./models/pairs");
+const { protocols } = require("./models/protocols");
+const { getPrice } = require("./helper/getPrice");
 
-let isExecuting = false;
+const amountIn = 1;
+const isDebug = true;
 
-const AmountOfEth = 100;
-
-let isDebug = true;
-
-const getPrice = async (baseToken, swapToken, protocol, amount) => {
-  if (protocol.fork == "V3") {
-    const price = await getPairPriceUniswapV3(
-      baseToken,
-      swapToken,
-      protocol,
-      amount,
-    );
-
-    return price;
-  }
-
-  if (protocol.fork == "Kyber") {
-    const price = await getKyberPrice(baseToken, swapToken, protocol, amount);
-
-    return price;
-  }
-  if (protocol.fork == "V2") {
-    const price = await getPairPriceUniswapV2(
-      baseToken,
-      swapToken,
-      protocol,
-      amount,
-    );
-
-    return price;
-  }
-
-  if (protocol.fork == "Fraxswap") {
-    const price = await getPairPriceUniswapV2(
-      baseToken,
-      swapToken,
-      protocol.routerAddress,
-      FRAXSWAPROUTER.abi,
-    );
-
-    return price;
-  }
-};
 const main = async () => {
+  let isExecuting = false;
   console.log("Starting scan...");
 
   POLYGON_PROVIDER.on("block", async (event) => {
@@ -75,13 +20,20 @@ const main = async () => {
       const estimateGasPrice = await POLYGON_PROVIDER.getFeeData();
       const maxFeePerGas = estimateGasPrice.maxFeePerGas;
 
-      const rates = await getBestRateForAllPairs();
+      const rates = await getBestRateForAllPairs().catch(() => {});
 
       const potentialAmountsOuts = await getPotentialAmountOutForAllPairs(
         rates,
-      );
+      ).catch(() => {});
 
-      console.log(JSON.stringify(potentialAmountsOuts, null, 2));
+      POLYGON_PAIRS.forEach((pair) => {
+        const pairName = getPairName(pair);
+        const potentialAmountOut = potentialAmountsOuts[pairName];
+
+        if (potentialAmountOut) {
+          displayData(pair, amountIn, potentialAmountOut);
+        }
+      });
 
       isExecuting = false;
     }
@@ -94,7 +46,7 @@ const getBestRateForAllPairs = async () => {
   let rates = {};
 
   // Get rates foe each pair
-  await Promise.all(
+  await Promise.allSettled(
     POLYGON_PAIRS.map(async (pair) => {
       const BASE_TOKEN = pair.token0;
       const SWAP_TOKEN = pair.token1;
@@ -110,7 +62,7 @@ const getBestRateForAllPairs = async () => {
       };
 
       // Get best prices for pair
-      await Promise.all(
+      await Promise.allSettled(
         protocols.map(async (protocol) => {
           // Fetch prices for pair at current protocol
           const [baseToSwap, swapToBase] = await Promise.all([
@@ -150,10 +102,12 @@ const getBestRateForAllPairs = async () => {
         }),
       );
 
-      rates[getPairName(pair)] = {
-        bestBaseToSwap: bestBaseToSwap,
-        bestSwapToBase: bestSwapToBase,
-      };
+      if (bestBaseToSwap.rate && bestSwapToBase.rate) {
+        rates[getPairName(pair)] = {
+          bestBaseToSwap: bestBaseToSwap,
+          bestSwapToBase: bestSwapToBase,
+        };
+      }
     }),
   );
 
@@ -162,7 +116,8 @@ const getBestRateForAllPairs = async () => {
 
 const getPotentialAmountOutForAllPairs = async (rates) => {
   let potentialAmountsOut = {};
-  await Promise.all(
+
+  await Promise.allSettled(
     POLYGON_PAIRS.map(async (pair) => {
       const BASE_TOKEN = pair.token0;
       const SWAP_TOKEN = pair.token1;
@@ -177,7 +132,7 @@ const getPotentialAmountOutForAllPairs = async (rates) => {
         BASE_TOKEN,
         bestSwapToBaseProtocol,
         bestBaseToSwapRate,
-      );
+      ).catch(() => {});
 
       const formattedPotentialAmountOut = ethers.utils.formatUnits(
         potentialAmountOut,
@@ -185,9 +140,7 @@ const getPotentialAmountOutForAllPairs = async (rates) => {
       );
 
       potentialAmountsOut[pairName] = {
-        rates: {
-          ...rates[pairName],
-        },
+        ...rates[pairName],
         potentialAmountOut: formattedPotentialAmountOut,
       };
     }),
@@ -196,30 +149,41 @@ const getPotentialAmountOutForAllPairs = async (rates) => {
   return potentialAmountsOut;
 };
 
-// const displayArbitrage = async () => {
+const displayData = (pair, amountIn, amountOut) => {
+  const baseTokenSymbol = pair.token0.symbol;
+  const baseToSwapRate = amountOut.bestBaseToSwap.rate;
 
-//   const profit = Number(formattedEstimatedOut) - Number("1.0");
+  const swapTokenSymbol = pair.token1.symbol;
+  const potentialAmountOut = amountOut.potentialAmountOut;
 
-//   if (isDebug == true || (isDebug == false && profit > 0)) {
-//     console.log(
-//       `1 ${BASE_TOKEN.name} -> ${lastMaxBaseToSwap.rate} ${
-//         SWAP_TOKEN.symbol
-//       } on ${chalk.cyanBright(`${lastMaxBaseToSwap.protocol.name} `)}`,
-//     );
+  const baseToSwapProtocolName = amountOut.bestBaseToSwap.protocol.name;
+  const swapToBaseProtocolName = amountOut.bestSwapToBase.protocol.name;
 
-//     console.log(
-//       `${lastMaxBaseToSwap.rate} ${
-//         SWAP_TOKEN.symbol
-//       }  -> ${formattedEstimatedOut} ${BASE_TOKEN.name} on ${chalk.cyanBright(
-//         `${lastMinSwapToBase.protocol.name} `,
-//       )}`,
-//     );
+  const proportionalBaseToSwapAmountOut =
+    Number(amountIn) * Number(baseToSwapRate);
+  const proportionalSwapToBaseAmountOut =
+    Number(amountIn) * Number(potentialAmountOut);
+  const profit = Number(proportionalSwapToBaseAmountOut) - Number(amountIn);
 
-//     if (profit > 0) {
-//       console.log(chalk.green(`>>>>> PROFIT ${profit} ${BASE_TOKEN.name}`));
-//     } else {
-//       console.log(chalk.red(`>>>>> PROFIT ${profit} ${BASE_TOKEN.name}`));
-//     }
-//   } else {
-//   }
-// };
+  console.log(
+    `${amountIn} ${baseTokenSymbol} -> ${proportionalBaseToSwapAmountOut} ${swapTokenSymbol} on ${chalk.cyanBright(
+      `${baseToSwapProtocolName} `,
+    )}`,
+  );
+
+  console.log(
+    `${
+      Number(amountIn) * Number(baseToSwapRate)
+    } ${swapTokenSymbol}  -> ${proportionalSwapToBaseAmountOut} ${baseTokenSymbol} on ${chalk.cyanBright(
+      `${swapToBaseProtocolName}`,
+    )}`,
+  );
+
+  if (profit > 0) {
+    console.log(chalk.green(`>>>>> PROFIT ${profit} ${baseTokenSymbol}`));
+  } else {
+    console.log(chalk.red(`>>>>> PROFIT ${profit} ${baseTokenSymbol}`));
+  }
+
+  console.log("*****");
+};
