@@ -15,7 +15,7 @@ const {
   getPrice: getKyberPrice,
 } = require("./scripts/helpers/kyberswap/GetQuote");
 
-const { POLYGON_PAIRS } = require("./scripts/pairs");
+const { POLYGON_PAIRS, getPairName } = require("./scripts/pairs");
 
 const chalk = require("chalk");
 
@@ -65,126 +65,23 @@ const getPrice = async (baseToken, swapToken, protocol, amount) => {
   }
 };
 const main = async () => {
-  console.log("Waiting for an event to happen on the pool...");
+  console.log("Starting scan...");
+
   POLYGON_PROVIDER.on("block", async (event) => {
-    console.log(" ");
     if (!isExecuting) {
       isExecuting = true;
-      console.log(`========`);
-      console.log("New block");
-      console.log(`========`);
+      console.log(`Block ${event}`);
 
       const estimateGasPrice = await POLYGON_PROVIDER.getFeeData();
       const maxFeePerGas = estimateGasPrice.maxFeePerGas;
 
-      const formattedGasFees = ethers.utils.formatEther(maxFeePerGas);
-      // console.log(`Estimate gas price  ${formattedGasFees}`);
+      const rates = await getBestRateForAllPairs();
 
-      POLYGON_PAIRS.forEach(async (pair) => {
-        const BASE_TOKEN = pair.token0;
-        const SWAP_TOKEN = pair.token1;
+      const potentialAmountsOuts = await getPotentialAmountOutForAllPairs(
+        rates,
+      );
 
-        let lastMaxBaseToSwap = {
-          rate: "-1",
-          protocol: null,
-          estimatedYield: null,
-        };
-        let lastMinSwapToBase = {
-          rate: "10000000000000000000000",
-          protocol: null,
-        };
-
-        await Promise.all(
-          protocols.map(async (protocol) => {
-            const [baseToSwap, swapToBase] = await Promise.all([
-              getPrice(BASE_TOKEN, SWAP_TOKEN, protocol, "1.0"),
-              getPrice(SWAP_TOKEN, BASE_TOKEN, protocol, "1.0"),
-            ]);
-
-            const formattedBaseToSwap = ethers.utils.formatUnits(
-              baseToSwap,
-              SWAP_TOKEN.decimals,
-            );
-
-            // console.log(protocol.name);
-            // console.log(formattedBaseToSwap);
-
-            if (Number(formattedBaseToSwap) > Number(lastMaxBaseToSwap.rate)) {
-              lastMaxBaseToSwap = {
-                rate: formattedBaseToSwap,
-                protocol: protocol,
-              };
-            }
-
-            const formattedSwapToBase =
-              1 / ethers.utils.formatUnits(swapToBase, BASE_TOKEN.decimals);
-
-            if (
-              Number(formattedSwapToBase) - Number(lastMinSwapToBase.rate) <
-              0
-            ) {
-              lastMinSwapToBase = {
-                rate: formattedSwapToBase,
-                protocol: protocol,
-              };
-            }
-          }),
-        );
-
-        const buyprotocolName = lastMaxBaseToSwap.protocol.name;
-        const sellprotocolName = lastMinSwapToBase.protocol.name;
-
-        const estimatedOut = await getPrice(
-          SWAP_TOKEN,
-          BASE_TOKEN,
-          lastMinSwapToBase.protocol,
-          lastMaxBaseToSwap.rate,
-        );
-
-        const formattedEstimatedOut = ethers.utils.formatUnits(
-          estimatedOut,
-          BASE_TOKEN.decimals,
-        );
-
-        const profit = Number(formattedEstimatedOut) - Number("1.0");
-
-        if (isDebug == true || (isDebug == false && profit > 0)) {
-          console.log(
-            `1 ${BASE_TOKEN.name} -> ${lastMaxBaseToSwap.rate} ${
-              SWAP_TOKEN.symbol
-            } on ${chalk.cyanBright(`${buyprotocolName} `)}`,
-          );
-
-          console.log(
-            `${lastMaxBaseToSwap.rate} ${
-              SWAP_TOKEN.symbol
-            }  -> ${formattedEstimatedOut} ${
-              BASE_TOKEN.name
-            } on ${chalk.cyanBright(`${sellprotocolName} `)}`,
-          );
-
-          if (profit > 0) {
-            console.log(
-              chalk.green(`>>>>> PROFIT ${profit} ${BASE_TOKEN.name}`),
-            );
-          } else {
-            console.log(chalk.red(`>>>>> PROFIT ${profit} ${BASE_TOKEN.name}`));
-          }
-
-          //console.log(`>>>> PROFIT:  ${profit} ${BASE_TOKEN.name}`);
-          console.log(`--------`);
-        } else {
-          // console.log("No opportunity");
-          // console.log(
-          //   `1 ${BASE_TOKEN.name}  -> ${lastMaxBaseToSwap.rate} ${SWAP_TOKEN.name}  on ${buyprotocolName}  `,
-          // );
-          // console.log(
-          //   `${lastMinSwapToBase.rate} ${SWAP_TOKEN.name}  -> 1 ${BASE_TOKEN.name} on ${sellprotocolName}  `,
-          // );
-        }
-      });
-
-      ///////////////////
+      console.log(JSON.stringify(potentialAmountsOuts, null, 2));
 
       isExecuting = false;
     }
@@ -192,3 +89,137 @@ const main = async () => {
 };
 
 main();
+
+const getBestRateForAllPairs = async () => {
+  let rates = {};
+
+  // Get rates foe each pair
+  await Promise.all(
+    POLYGON_PAIRS.map(async (pair) => {
+      const BASE_TOKEN = pair.token0;
+      const SWAP_TOKEN = pair.token1;
+
+      let bestBaseToSwap = {
+        rate: null,
+        protocol: null,
+      };
+
+      let bestSwapToBase = {
+        rate: null,
+        protocol: null,
+      };
+
+      // Get best prices for pair
+      await Promise.all(
+        protocols.map(async (protocol) => {
+          // Fetch prices for pair at current protocol
+          const [baseToSwap, swapToBase] = await Promise.all([
+            getPrice(BASE_TOKEN, SWAP_TOKEN, protocol, "1.0"),
+            getPrice(SWAP_TOKEN, BASE_TOKEN, protocol, "1.0"),
+          ]);
+
+          const formattedBaseToSwap = ethers.utils.formatUnits(
+            baseToSwap,
+            SWAP_TOKEN.decimals,
+          );
+
+          const formattedSwapToBase =
+            1 / ethers.utils.formatUnits(swapToBase, BASE_TOKEN.decimals);
+
+          // is this the better than price in last protocol?
+          // if yes: Update price tracker
+          if (
+            !bestBaseToSwap.rate ||
+            Number(formattedBaseToSwap) > Number(bestBaseToSwap.rate)
+          ) {
+            bestBaseToSwap = {
+              rate: formattedBaseToSwap,
+              protocol: protocol,
+            };
+          }
+
+          if (
+            !bestSwapToBase.rate ||
+            Number(formattedSwapToBase) < Number(bestSwapToBase.rate)
+          ) {
+            bestSwapToBase = {
+              rate: formattedSwapToBase,
+              protocol: protocol,
+            };
+          }
+        }),
+      );
+
+      rates[getPairName(pair)] = {
+        bestBaseToSwap: bestBaseToSwap,
+        bestSwapToBase: bestSwapToBase,
+      };
+    }),
+  );
+
+  return rates;
+};
+
+const getPotentialAmountOutForAllPairs = async (rates) => {
+  let potentialAmountsOut = {};
+  await Promise.all(
+    POLYGON_PAIRS.map(async (pair) => {
+      const BASE_TOKEN = pair.token0;
+      const SWAP_TOKEN = pair.token1;
+
+      const pairName = getPairName(pair);
+
+      const bestSwapToBaseProtocol = rates[pairName].bestSwapToBase.protocol;
+      const bestBaseToSwapRate = rates[pairName].bestBaseToSwap.rate;
+
+      const potentialAmountOut = await getPrice(
+        SWAP_TOKEN,
+        BASE_TOKEN,
+        bestSwapToBaseProtocol,
+        bestBaseToSwapRate,
+      );
+
+      const formattedPotentialAmountOut = ethers.utils.formatUnits(
+        potentialAmountOut,
+        BASE_TOKEN.decimals,
+      );
+
+      potentialAmountsOut[pairName] = {
+        rates: {
+          ...rates[pairName],
+        },
+        potentialAmountOut: formattedPotentialAmountOut,
+      };
+    }),
+  );
+
+  return potentialAmountsOut;
+};
+
+// const displayArbitrage = async () => {
+
+//   const profit = Number(formattedEstimatedOut) - Number("1.0");
+
+//   if (isDebug == true || (isDebug == false && profit > 0)) {
+//     console.log(
+//       `1 ${BASE_TOKEN.name} -> ${lastMaxBaseToSwap.rate} ${
+//         SWAP_TOKEN.symbol
+//       } on ${chalk.cyanBright(`${lastMaxBaseToSwap.protocol.name} `)}`,
+//     );
+
+//     console.log(
+//       `${lastMaxBaseToSwap.rate} ${
+//         SWAP_TOKEN.symbol
+//       }  -> ${formattedEstimatedOut} ${BASE_TOKEN.name} on ${chalk.cyanBright(
+//         `${lastMinSwapToBase.protocol.name} `,
+//       )}`,
+//     );
+
+//     if (profit > 0) {
+//       console.log(chalk.green(`>>>>> PROFIT ${profit} ${BASE_TOKEN.name}`));
+//     } else {
+//       console.log(chalk.red(`>>>>> PROFIT ${profit} ${BASE_TOKEN.name}`));
+//     }
+//   } else {
+//   }
+// };
