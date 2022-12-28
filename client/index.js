@@ -1,3 +1,4 @@
+require("dotenv").config();
 const ethers = require("ethers");
 const chalk = require("chalk");
 const { POLYGON_PROVIDER } = require("./provider");
@@ -5,8 +6,7 @@ const { POLYGON_PAIRS, getPairName } = require("./models/pairs");
 const { protocols } = require("./models/protocols");
 const { getPrice } = require("./helper/getPrice");
 
-const amountIn = 1;
-const isDebug = true;
+const amountIn = process.env.AMOUNT_IN;
 
 const main = async () => {
   let isExecuting = false;
@@ -15,22 +15,30 @@ const main = async () => {
   POLYGON_PROVIDER.on("block", async (event) => {
     if (!isExecuting) {
       isExecuting = true;
-      console.log(`Block ${event}`);
+      console.log("*****************************************");
+      console.log(`BLOCK ${event}`);
+      console.log("*****************************************");
 
       const estimateGasPrice = await POLYGON_PROVIDER.getFeeData();
       const maxFeePerGas = estimateGasPrice.maxFeePerGas;
 
-      const rates = await getBestRateForAllPairs().catch(() => {});
+      const rates = await getBestRateForAllPairs().catch((e) => {
+        console.log(e);
+      });
 
       const potentialAmountsOuts = await getPotentialAmountOutForAllPairs(
         rates,
-      ).catch(() => {});
+      ).catch((e) => {
+        console.log(e);
+      });
 
       POLYGON_PAIRS.forEach((pair) => {
         const pairName = getPairName(pair);
         const potentialAmountOut = potentialAmountsOuts[pairName];
 
-        if (potentialAmountOut) {
+        const profit = Number(potentialAmountOut) - Number(amountIn);
+
+        if (profit > 0 || process.env.IS_DEBUG == 1) {
           displayData(pair, amountIn, potentialAmountOut);
         }
       });
@@ -39,8 +47,6 @@ const main = async () => {
     }
   });
 };
-
-main();
 
 const getBestRateForAllPairs = async () => {
   let rates = {};
@@ -184,6 +190,7 @@ const displayData = (pair, amountIn, amountOut) => {
   } else {
     console.log(chalk.red(`>>>>> PROFIT ${profit} ${baseTokenSymbol}`));
   }
-
-  console.log("*****");
+  console.log("");
 };
+
+module.exports = { main };

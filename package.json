@@ -5,10 +5,15 @@
     "@nomiclabs/hardhat-waffle": "^2.0.3",
     "axios": "^1.2.1",
     "chalk": "^4.1.2",
+    "dotenv": "^16.0.3",
     "hardhat": "^2.12.2"
   },
   "dependencies": {
     "big.js": "^6.2.1",
+    "boxen": "^7.0.1",
     "ethers": "^5.7.2"
+  },
+  "bin": {
+    "arabitror": "./bin/index.js"
   }
 }
